@@ -1,0 +1,171 @@
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Complete Stack for Streamlit Emotion Detection with AWS
+
+Resources:
+
+  EmotionLogsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: EmotionLogs
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+
+  EmotionAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: EmotionAlertTopic
+
+  RekognitionEmotionLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: RekognitionEmotionLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RekognitionS3DynamoSNSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rekognition:DetectFaces
+                  - s3:GetObject
+                Resource: arn:aws:s3:::your-s3-bucket-name/*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                Resource: !GetAtt EmotionLogsTable.Arn
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref EmotionAlertTopic
+
+  EmotionDetectionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: DetectEmotionFromFace
+      Handler: index.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt RekognitionEmotionLambdaRole.Arn
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref EmotionAlertTopic
+          DYNAMODB_TABLE: EmotionLogs
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          from datetime import datetime
+
+          rekognition = boto3.client('rekognition')
+          dynamodb = boto3.client('dynamodb')
+          sns = boto3.client('sns')
+
+          def lambda_handler(event, context):
+              bucket = event['bucket']
+              image_name = event['image']
+              user_id = event.get('user_id', 'anonymous')
+
+              response = rekognition.detect_faces(
+                  Image={'S3Object': {'Bucket': bucket, 'Name': image_name}},
+                  Attributes=['ALL']
+              )
+
+              emotions_detected = []
+              for faceDetail in response['FaceDetails']:
+                  emotions = sorted(faceDetail['Emotions'], key=lambda e: e['Confidence'], reverse=True)
+                  top = emotions[0]
+                  emotions_detected.append({
+                      "TopEmotion": top['Type'],
+                      "Confidence": round(top['Confidence'], 2)
+                  })
+
+                  dynamodb.put_item(
+                      TableName=os.environ['DYNAMODB_TABLE'],
+                      Item={
+                          'user_id': {'S': user_id},
+                          'timestamp': {'S': datetime.utcnow().isoformat()},
+                          'emotion': {'S': top['Type']},
+                          'confidence': {'N': str(round(top['Confidence'], 2))}
+                      }
+                  )
+
+                  if top['Type'] == 'SAD':
+                      today = datetime.utcnow().date().isoformat()
+                      response = dynamodb.query(
+                          TableName=os.environ['DYNAMODB_TABLE'],
+                          KeyConditionExpression='user_id = :uid and begins_with(timestamp, :today)',
+                          ExpressionAttributeValues={
+                              ':uid': {'S': user_id},
+                              ':today': {'S': today}
+                          }
+                      )
+                      sad_entries = [item for item in response.get('Items', []) if item.get('emotion', {}).get('S') == 'SAD']
+                      if len(sad_entries) >= 3:
+                          sns.publish(
+                              TopicArn=os.environ['SNS_TOPIC_ARN'],
+                              Message=f"ALERT: {user_id} showed SAD 3+ times today",
+                              Subject="Emotion Alert"
+                          )
+
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps(emotions_detected)
+              }
+      Timeout: 15
+
+  StreamlitAppIAMUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: streamlit-app-user
+      Policies:
+        - PolicyName: StreamlitEmotionAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt EmotionDetectionLambda.Arn
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: arn:aws:s3:::your-s3-bucket-name/*
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref EmotionAlertTopic
+
+Outputs:
+  LambdaFunctionARN:
+    Description: ARN of the deployed Lambda function
+    Value: !GetAtt EmotionDetectionLambda.Arn
+
+  SNSAlertTopicARN:
+    Description: SNS topic ARN for emotion alerts
+    Value: !Ref EmotionAlertTopic
+
+  IAMUserName:
+    Description: Streamlit IAM User
+    Value: !Ref StreamlitAppIAMUser
