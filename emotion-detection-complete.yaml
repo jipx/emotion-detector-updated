@@ -4,6 +4,28 @@ Description: Complete Stack for Streamlit Emotion Detection with AWS
 
 Resources:
 
+  EmotionImageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: your-s3-bucket-name
+
+  EmotionImageBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn: EmotionImageBucket
+    Properties:
+      Bucket: !Ref EmotionImageBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !Sub "${EmotionImageBucket.Arn}/*"
+              - !GetAtt EmotionImageBucket.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
   EmotionLogsTable:
     Type: AWS::DynamoDB::Table
     Properties:
