@@ -1,0 +1,27 @@
+# Streamlit Secrets (Never commit)
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+dist/
+build/
+env/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# AWS credentials (just in case)
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/
