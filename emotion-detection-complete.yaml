@@ -1,13 +1,13 @@
 
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Complete Stack for Streamlit Emotion Detection with AWS
+Description: Complete Streamlit Emotion Detection Stack
 
 Resources:
 
   EmotionImageBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: your-s3-bucket-name
+      BucketName: emotion-images-your-unique-name-12345
 
   EmotionImageBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -15,13 +15,14 @@ Resources:
     Properties:
       Bucket: !Ref EmotionImageBucket
       PolicyDocument:
+        Version: '2012-10-17'
         Statement:
           - Effect: Deny
             Principal: "*"
             Action: "s3:*"
             Resource:
+              - !Sub "${EmotionImageBucket.Arn}"
               - !Sub "${EmotionImageBucket.Arn}/*"
-              - !GetAtt EmotionImageBucket.Arn
             Condition:
               Bool:
                 aws:SecureTransport: false
@@ -59,24 +60,19 @@ Resources:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: RekognitionS3DynamoSNSAccess
+        - PolicyName: LambdaAccessPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action:
-                  - rekognition:DetectFaces
+                Action: rekognition:DetectFaces
                 Resource: "*"
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                Resource: arn:aws:s3:::your-s3-bucket-name/*
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: '*'
+                Resource: "*"
               - Effect: Allow
                 Action:
                   - dynamodb:PutItem
@@ -85,6 +81,10 @@ Resources:
               - Effect: Allow
                 Action: sns:Publish
                 Resource: !Ref EmotionAlertTopic
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "${EmotionImageBucket.Arn}/*"
 
   EmotionDetectionLambda:
     Type: AWS::Lambda::Function
@@ -177,7 +177,7 @@ Resources:
                 Action:
                   - s3:PutObject
                   - s3:GetObject
-                Resource: arn:aws:s3:::your-s3-bucket-name/*
+                Resource: !Sub "${EmotionImageBucket.Arn}/*"
               - Effect: Allow
                 Action: sns:Publish
                 Resource: !Ref EmotionAlertTopic
@@ -191,6 +191,10 @@ Outputs:
     Description: SNS topic ARN for emotion alerts
     Value: !Ref EmotionAlertTopic
 
+  S3BucketName:
+    Description: Emotion Image Bucket Name
+    Value: !Ref EmotionImageBucket
+
   IAMUserName:
-    Description: Streamlit IAM User
+    Description: IAM User for Streamlit Access
     Value: !Ref StreamlitAppIAMUser
